@@ -28,7 +28,10 @@ import math
 import re
 import threading
 import six
+from prometheus_client import Gauge
 
+PENDING_EVENTS = Gauge('bg_pending_events', 'Pending events')
+TIMEOUT_EVENTS = Gauge('bg_timeout_events', 'Timeout events')
 
 class Error(Exception):
     """Base class for all exceptions from this module."""
@@ -89,11 +92,16 @@ def _wait_async_call(async_function, *args, **kwargs):
     def on_done(exception):
         exception_box[0] = exception
         event.set()
-
+        PENDING_EVENTS.dec() 
+        
+    PENDING_EVENTS.inc()
     async_function(*args, on_done=on_done, **kwargs)
     # c.f. https://github.com/criteo/biggraphite/issues/296
     # under higher load BG will freeze, blocking on this wait()
-    event.wait(3.0)
+    ok=event.wait(3.0)
+    if ok!=True:
+        TIMEOUT_EVENTS.inc()
+
     if exception_box[0]:
         raise exception_box[0]
 
