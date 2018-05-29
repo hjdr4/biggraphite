@@ -72,6 +72,36 @@ class CountDown(object):
         self.cancel(Error(exc))
 
 
+class AsyncTaskCounter:
+    """Provides a counter usable by multiple threads
+    One thread can call wait_zero() to wait for the counter to be 0
+    """
+
+    def __init__(self):
+        self._tasks = 0
+        self._lock = threading.Lock()
+        self._zero = threading.Event()
+        self._zero.set()
+
+    def inc(self):
+        self._lock.acquire()
+        self._tasks += 1
+        self._zero.clear()
+        self._lock.release()
+
+    def dec(self):
+        self._lock.acquire()
+        self._tasks -= 1
+        if self._tasks == 0:
+            self._zero.set()
+        else:
+            self._zero.clear()
+        self._lock.release()
+
+    def wait_zero(self):
+        self._zero.wait()
+
+
 def list_from_str(value):
     """Convert a comma separated string into a list.
 

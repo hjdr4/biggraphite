@@ -45,6 +45,7 @@ from biggraphite.drivers import cassandra_common as common
 from biggraphite.drivers import _downsampling
 from biggraphite.drivers import _delayed_writer
 from biggraphite.drivers import _utils
+from biggraphite.drivers._utils import AsyncTaskCounter
 from biggraphite.drivers import cassandra_policies as bg_cassandra_policies
 
 import prometheus_client
@@ -904,6 +905,7 @@ class _CassandraAccessor(bg_accessor.Accessor):
         self._meta_background_consistency = consistency_name_to_value[meta_background_consistency]
         self._data_write_consistency = consistency_name_to_value[data_write_consistency]
         self._data_read_consistency = consistency_name_to_value[data_read_consistency]
+        self._async_writes = AsyncTaskCounter()
         if writer is None:
             # TODO: Currently a random shard is good enough.
             # We should use a counter stored in cassandra instead.
@@ -1479,7 +1481,8 @@ class _CassandraAccessor(bg_accessor.Accessor):
             # As queries can be statements, we use the string representation
             # (which always contains the query and the parameters).
             # WARNING: With the current code PrepareStatement would not be cached.
-            keys_to_queries = {self.__query_key(*sp): sp for sp in statements_with_params}
+            keys_to_queries = {self.__query_key(
+                *sp): sp for sp in statements_with_params}
             cached_results = self.cache.get_many(keys_to_queries.keys())
             for key in cached_results:
                 statements_with_params.remove(keys_to_queries[key])
@@ -1606,6 +1609,11 @@ class _CassandraAccessor(bg_accessor.Accessor):
 
             future = self._execute_async(
                 session=self.__session_data, query=statement, parameters=args)
+
+            self._async_writes.inc()
+            future.add_callbacks(lambda result: self._async_writes.dec(
+            ), lambda result: self._async_writes.dec())
+
             if count_down:
                 if count > 1:
                     # If batched we will get less results.
@@ -1759,7 +1767,8 @@ class _CassandraAccessor(bg_accessor.Accessor):
                     continue
 
                 try:
-                    metadata = bg_accessor.MetricMetadata.from_string_dict(config)
+                    metadata = bg_accessor.MetricMetadata.from_string_dict(
+                        config)
                     metric = bg_accessor.Metric(
                         metric_name, uid, metadata,
                         created_on, updated_on, read_on,
